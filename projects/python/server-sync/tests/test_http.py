@@ -153,3 +153,37 @@ def test_delete_user(client: TestClient) -> None:
     token2 = _register_and_login(client)
     headers2 = {"Authorization": f"Bearer {token2}"}
     assert client.get("/texts", headers=headers2).json() == {"data": []}
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("PATCH", "/users/me"),
+        ("PATCH", "/texts/note"),
+        ("POST", "/texts/note"),
+        ("DELETE", "/echo"),
+        ("PUT", "/ping"),
+    ],
+)
+def test_method_not_allowed(client: TestClient, method: str, path: str) -> None:
+    assert client.request(method, path).status_code == 405
+
+
+def test_unknown_path_404(client: TestClient) -> None:
+    assert client.get("/unknown").status_code == 404
+    assert client.get("/texts/").status_code == 404
+
+
+def test_empty_text_roundtrip(client: TestClient) -> None:
+    token = _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.put("/texts/note", json={"text": ""}, headers=headers).status_code == 200
+    assert client.get("/texts/note", headers=headers).json() == {"data": ""}
+
+
+def test_text_list_sorted(client: TestClient) -> None:
+    token = _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    for name in ("zebra", "apple", "mango"):
+        client.put(f"/texts/{name}", json={"text": "x"}, headers=headers)
+    assert client.get("/texts", headers=headers).json() == {"data": ["apple", "mango", "zebra"]}
