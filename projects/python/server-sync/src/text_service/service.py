@@ -5,6 +5,7 @@ import hmac
 import re
 import secrets
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -63,13 +64,15 @@ class User:
     salt: bytes
     digest: bytes
     token: str | None = None
+    token_deadline: float = 0.0
     texts: dict[str, str] = field(default_factory=dict)
 
 
 class Service:
-    def __init__(self) -> None:
+    def __init__(self, token_ttl_seconds: int = 300) -> None:
         self.users: dict[str, User] = {}
         self.lock = threading.Lock()
+        self.token_ttl_seconds = token_ttl_seconds
 
     def handle(
         self, method: str, path: str, body: Any, authorization: str
@@ -125,8 +128,8 @@ class Service:
                 if self.users.get(name) is not user or not hmac.compare_digest(digest, expected):
                     return 401, {"message": "Invalid username or password"}
                 user.token = secrets.token_urlsafe(32)
-                # Later server task: record a deadline and return expires_in.
-                return 200, {"data": {"token": user.token}}
+                user.token_deadline = time.monotonic() + self.token_ttl_seconds
+                return 200, {"data": {"token": user.token, "expires_in": self.token_ttl_seconds}}
         protected = path in ("/texts", "/sessions/current", "/users/me") or (
             path.startswith("/texts/") and path != "/texts/"
         )
@@ -136,9 +139,8 @@ class Service:
             )
             with self.lock:
                 user = next((u for u in self.users.values() if token and u.token == token), None)
-                if user is None:
+                if user is None or time.monotonic() >= user.token_deadline:
                     return 401, {"message": "Login required"}
-                # Later server task: check token expiry here, before reading or modifying state.
                 if path == "/sessions/current" and method == "DELETE":
                     user.token = None
                     return 200, {"data": None}

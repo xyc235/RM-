@@ -8,8 +8,11 @@ def test_account_lifecycle() -> None:
     assert service.handle("POST", "/users", account, "")[0] == 201
     assert service.handle("POST", "/users", account, "")[0] == 409
     assert service.handle("POST", "/sessions", {**account, "password": "incorrect"}, "")[0] == 401
-    token = service.handle("POST", "/sessions", account, "")[1]["data"]["token"]
-    next_token = service.handle("POST", "/sessions", account, "")[1]["data"]["token"]
+    session = service.handle("POST", "/sessions", account, "")[1]["data"]
+    token = session["token"]
+    assert session["expires_in"] == 300
+    next_session = service.handle("POST", "/sessions", account, "")[1]["data"]
+    next_token = next_session["token"]
     assert token != next_token
     assert service.handle("GET", "/texts", None, f"Bearer {token}")[0] == 401
     assert service.handle("GET", "/texts", None, f"Bearer {next_token}") == (200, {"data": []})
@@ -37,3 +40,32 @@ def test_concurrent_registration() -> None:
     with ThreadPoolExecutor(max_workers=4) as pool:
         statuses = list(pool.map(lambda _: service.handle("POST", "/users", body, "")[0], range(4)))
     assert sorted(statuses) == [201, 409, 409, 409]
+
+
+def test_token_expiry() -> None:
+    import time
+
+    service = Service(token_ttl_seconds=1)
+    account = {"username": "alice", "password": "password1"}
+    service.handle("POST", "/users", account, "")
+    session = service.handle("POST", "/sessions", account, "")[1]["data"]
+    token = session["token"]
+    assert session["expires_in"] == 1
+    # Token works immediately.
+    assert service.handle("GET", "/texts", None, f"Bearer {token}")[0] == 200
+    # Wait for expiry.
+    time.sleep(1.1)
+    assert service.handle("GET", "/texts", None, f"Bearer {token}")[0] == 401
+    # Re-login produces a new working token.
+    session2 = service.handle("POST", "/sessions", account, "")[1]["data"]
+    token2 = session2["token"]
+    assert token2 != token
+    assert service.handle("GET", "/texts", None, f"Bearer {token2}")[0] == 200
+
+
+def test_token_ttl_config() -> None:
+    service = Service(token_ttl_seconds=60)
+    account = {"username": "alice", "password": "password1"}
+    service.handle("POST", "/users", account, "")
+    session = service.handle("POST", "/sessions", account, "")[1]["data"]
+    assert session["expires_in"] == 60
