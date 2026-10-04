@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -197,3 +198,42 @@ async def test_text_list_sorted(client: AsyncClient) -> None:
     assert (await client.get("/texts", headers=headers)).json() == {
         "data": ["apple", "mango", "zebra"]
     }
+
+
+async def test_concurrent_uploads_async(client: AsyncClient) -> None:
+    """Concurrent async uploads of distinct names all succeed and appear sorted."""
+    await client.post("/users", json={"username": "alice", "password": "password1"})
+    response = await client.post("/sessions", json={"username": "alice", "password": "password1"})
+    token = response.json()["data"]["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    names = [f"note{i}" for i in range(20)]
+
+    async def upload(name: str) -> int:
+        resp = await client.put(f"/texts/{name}", json={"text": name}, headers=headers)
+        return resp.status_code
+
+    results = await asyncio.gather(*[upload(n) for n in names])
+    assert results == [200] * 20
+    listed = (await client.get("/texts", headers=headers)).json()["data"]
+    assert listed == sorted(names)
+
+
+async def test_concurrent_logins_async(client: AsyncClient) -> None:
+    """Concurrent async logins leave exactly one valid token."""
+    await client.post("/users", json={"username": "alice", "password": "password1"})
+
+    async def login() -> str:
+        resp = await client.post("/sessions", json={"username": "alice", "password": "password1"})
+        return resp.json()["data"]["token"]
+
+    tokens = await asyncio.gather(*[login() for _ in range(4)])
+    unique_tokens = set(tokens)
+
+    async def check(token: str) -> int:
+        resp = await client.get("/texts", headers={"Authorization": f"Bearer {token}"})
+        return resp.status_code
+
+    statuses = await asyncio.gather(*[check(t) for t in unique_tokens])
+    valid = [s for s in statuses if s == 200]
+    assert len(valid) == 1
