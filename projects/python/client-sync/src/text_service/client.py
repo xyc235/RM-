@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+END_MARKER = "---END---"
+
 
 def exchange(
     client: httpx.Client, method: str, path: str, token: str = "", body: object = None
@@ -15,6 +17,26 @@ def exchange(
     except ValueError:
         result = {"message": response.text}
     return response.status_code, result
+
+
+def read_multiline(prompt: str) -> str:
+    """Read possibly multi-line text until a line with only END_MARKER is entered.
+
+    The marker line itself is not part of the text, so a body line equal to the
+    marker can still be expressed by splitting it across two lines or escaping.
+    An empty line right before the marker is preserved as a trailing newline.
+    """
+    print(prompt)
+    lines: list[str] = []
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+        if line == END_MARKER:
+            break
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def main() -> None:
@@ -46,9 +68,23 @@ def main() -> None:
                         "logout": ("DELETE", "/sessions/current"),
                         "list": ("GET", "/texts"),
                     }[command]
-                elif command in ("echo", "delete-user", "put", "get", "delete"):
-                    print("This task is not implemented in the starting code yet.")
-                    continue
+                elif command == "echo":
+                    text = read_multiline("Enter text (end with a line '---END---'):")
+                    body = {"text": text}
+                    method, path = "POST", "/echo"
+                elif command == "put":
+                    name = input("text name: ").strip()
+                    text = read_multiline("Enter text (end with a line '---END---'):")
+                    body = {"text": text}
+                    method, path = "PUT", f"/texts/{name}"
+                elif command == "get":
+                    name = input("text name: ").strip()
+                    method, path = "GET", f"/texts/{name}"
+                elif command == "delete":
+                    name = input("text name: ").strip()
+                    method, path = "DELETE", f"/texts/{name}"
+                elif command == "delete-user":
+                    method, path = "DELETE", "/users/me"
                 else:
                     print("Unknown command.")
                     continue
@@ -59,7 +95,7 @@ def main() -> None:
                         token = result["data"]["token"]
                     if status == 401:
                         print("Please log in again.")
-                    if status == 401 or (command == "logout" and status == 200):
+                    if status == 401 or (command in ("logout", "delete-user") and status == 200):
                         token = ""
                 except (httpx.HTTPError, ValueError, KeyError) as exc:
                     print(f"Request failed: {exc}")
